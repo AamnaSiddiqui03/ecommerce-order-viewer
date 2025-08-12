@@ -24,6 +24,7 @@ const UserSearch = () => {
   const [userOrders, setUserOrders] = useState([]);
   const [selectedOrder, setSelectedOrder] = useState(null);
   const [orderItems, setOrderItems] = useState([]);
+  const [loadingOrders, setLoadingOrders] = useState(false);
 
   const searchUsers = async () => {
     setLoading(true);
@@ -57,17 +58,39 @@ const UserSearch = () => {
     }
   };
 
-  const getUserOrders = async (userName) => {
+  const getUserOrders = async (userId) => {
     try {
-      console.log('Getting orders for user:', userName); // Debug log
+      console.log('Getting orders for user ID:', userId); // Debug log
+      setLoadingOrders(true);
       
-      const response = await fetch(`http://localhost:5000/api/users/${encodeURIComponent(userName)}/orders`);
+      // Clear previous user data and order items when switching users
+      setUserOrders([]);
+      setSelectedUser(null);
+      setOrderItems([]);
+      setSelectedOrder(null);
+      setError(''); // Clear any previous errors
+      
+      // Get orders directly by user ID using the new endpoint
+      const url = `http://localhost:5000/api/users/id/${userId}/orders`;
+      console.log('Fetching from URL:', url);
+      
+      const response = await fetch(url);
+      
+      console.log('Response status:', response.status);
+      console.log('Response headers:', response.headers);
+      
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error('Error response body:', errorText);
+        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+      }
+      
       const data = await response.json();
 
       if (data.success) {
         setUserOrders(data.orders);
         setSelectedUser(data.user);
-        setError(''); // Clear any previous errors
+        console.log(`Loaded ${data.orders.length} orders for user ${data.user.first_name} ${data.user.last_name} (ID: ${userId})`);
       } else {
         setError(data.error || 'Failed to fetch user orders');
         console.error('API Error:', data.error);
@@ -75,28 +98,47 @@ const UserSearch = () => {
     } catch (err) {
       setError('Failed to fetch user orders: ' + err.message);
       console.error('Network Error:', err);
+    } finally {
+      setLoadingOrders(false);
     }
   };
 
   const getOrderItems = async (orderId) => {
     try {
+      // Clear previous order items and selected order first
+      setOrderItems([]);
+      setSelectedOrder(null);
+      setError(''); // Clear any previous errors
+      
       const response = await fetch(`http://localhost:5000/api/orders/${orderId}/items`);
       const data = await response.json();
 
       if (data.success) {
         setOrderItems(data.items);
         setSelectedOrder(data.order);
+        console.log(`Loaded ${data.items.length} items for order ${orderId}`);
       } else {
         setError(data.error || 'Failed to fetch order items');
+        setOrderItems([]);
+        setSelectedOrder(null);
       }
     } catch (err) {
-      setError('Failed to fetch order items');
+      setError('Failed to fetch order items: ' + err.message);
+      setOrderItems([]);
+      setSelectedOrder(null);
     }
   };
 
   const handleSearch = (e) => {
     e.preventDefault();
     setPage(1);
+    // Clear previous search results and user data
+    setUsers([]);
+    setSelectedUser(null);
+    setUserOrders([]);
+    setSelectedOrder(null);
+    setOrderItems([]);
+    setError('');
     searchUsers();
   };
 
@@ -115,6 +157,13 @@ const UserSearch = () => {
     setPage(1);
     setSortBy('first_name');
     setSortOrder('asc');
+    // Clear all search results and user data
+    setUsers([]);
+    setSelectedUser(null);
+    setUserOrders([]);
+    setSelectedOrder(null);
+    setOrderItems([]);
+    setError('');
   };
 
   useEffect(() => {
@@ -265,9 +314,19 @@ const UserSearch = () => {
                 <div className="user-actions">
                   <button 
                     className="btn btn-outline"
-                    onClick={() => getUserOrders(user.first_name || user.last_name)}
+                    onClick={() => getUserOrders(user.id)}
                   >
                     📦 View Orders
+                  </button>
+                  <button 
+                    className="btn btn-secondary"
+                    onClick={() => {
+                      console.log('User data:', user);
+                      console.log('User ID:', user.id, 'Type:', typeof user.id);
+                    }}
+                    style={{ marginLeft: '10px', fontSize: '0.8rem', padding: '8px 12px' }}
+                  >
+                    🐛 Debug
                   </button>
                 </div>
               </div>
@@ -300,79 +359,112 @@ const UserSearch = () => {
       )}
 
       {/* User Orders */}
-      {selectedUser && userOrders.length > 0 && (
+      {selectedUser && (
         <div className="orders-container">
           <h2>📦 Orders for {selectedUser.first_name || selectedUser.last_name}</h2>
-          <div className="user-summary">
-            <div className="summary-card">
-              <h4>📊 User Summary</h4>
-              <p><strong>Total Orders:</strong> {userOrders.length}</p>
-              <p><strong>Total Items:</strong> {userOrders.reduce((sum, order) => sum + (order.num_of_item || 0), 0)}</p>
-              <p><strong>Active Orders:</strong> {userOrders.filter(order => order.status !== 'Cancelled').length}</p>
-              <p><strong>Cancelled Orders:</strong> {userOrders.filter(order => order.status === 'Cancelled').length}</p>
-            </div>
-          </div>
           
-          <div className="orders-grid">
-            {userOrders.map((order) => (
-              <div key={order.order_id} className="order-card">
-                <div className="order-header">
-                  <h4>Order #{order.order_id}</h4>
-                  <span className={`order-status status-${order.status?.toLowerCase()}`}>
-                    {order.status}
-                  </span>
+          {loadingOrders ? (
+            <div className="loading-spinner">
+              <h3>🔍 Loading Orders...</h3>
+              <p>Fetching orders for user ID: {selectedUser.id}</p>
+            </div>
+          ) : userOrders.length > 0 ? (
+            <>
+              <div className="user-summary">
+                <div className="summary-card">
+                  <h4>📊 User Summary</h4>
+                  <p><strong>Total Orders:</strong> {userOrders.length}</p>
+                  <p><strong>Total Items:</strong> {userOrders.reduce((sum, order) => sum + (order.num_of_item || 0), 0)}</p>
+                  <p><strong>Active Orders:</strong> {userOrders.filter(order => order.status !== 'Cancelled').length}</p>
+                  <p><strong>Cancelled Orders:</strong> {userOrders.filter(order => order.status === 'Cancelled').length}</p>
                 </div>
-                <div className="order-details">
-                  <p><strong>Items:</strong> {order.num_of_item}</p>
-                  <p><strong>Date:</strong> {new Date(order.created_at).toLocaleDateString()}</p>
-                  {order.shipped_at && <p><strong>Shipped:</strong> {new Date(order.shipped_at).toLocaleDateString()}</p>}
-                  {order.delivered_at && <p><strong>Delivered:</strong> {new Date(order.delivered_at).toLocaleDateString()}</p>}
-                </div>
-                <button 
-                  className="btn btn-outline"
-                  onClick={() => getOrderItems(order.order_id)}
-                >
-                  🛍️ View Items
-                </button>
               </div>
-            ))}
-          </div>
+              
+              <div className="orders-grid">
+                {userOrders.map((order) => (
+                  <div key={order.order_id} className="order-card">
+                    <div className="order-header">
+                      <h4>Order #{order.order_id}</h4>
+                      <span className={`order-status status-${order.status?.toLowerCase()}`}>
+                        {order.status}
+                      </span>
+                    </div>
+                    <div className="order-details">
+                      <p><strong>Items:</strong> {order.num_of_item}</p>
+                      <p><strong>Date:</strong> {new Date(order.created_at).toLocaleDateString()}</p>
+                      {order.shipped_at && <p><strong>Shipped:</strong> {new Date(order.shipped_at).toLocaleDateString()}</p>}
+                      {order.delivered_at && <p><strong>Delivered:</strong> {new Date(order.delivered_at).toLocaleDateString()}</p>}
+                    </div>
+                    <button 
+                      className="btn btn-outline"
+                      onClick={() => getOrderItems(order.order_id)}
+                    >
+                      🛍️ View Items
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </>
+          ) : (
+            <div className="no-results">
+              <h3>📭 No Orders Found</h3>
+              <p>This user doesn't have any orders yet.</p>
+              <p><strong>User ID:</strong> {selectedUser.id}</p>
+              <p><strong>Debug Info:</strong> Check backend console for detailed logs</p>
+              <p><strong>Try:</strong> Visit <code>/api/debug/datatypes</code> to check data types</p>
+            </div>
+          )}
         </div>
       )}
 
-      {/* Order Items */}
+      {/* Order Items Modal */}
       {selectedOrder && orderItems.length > 0 && (
-        <div className="order-items-container">
-          <h2>🛍️ Items in Order #{selectedOrder.id}</h2>
-          <div className="order-summary">
-            <div className="summary-card">
-              <h4>📋 Order Summary</h4>
-              <p><strong>Order ID:</strong> {selectedOrder.id}</p>
-              <p><strong>Status:</strong> {selectedOrder.status}</p>
-              <p><strong>Total Items:</strong> {orderItems.length}</p>
-              <p><strong>Created:</strong> {new Date(selectedOrder.created_at).toLocaleDateString()}</p>
-              {selectedOrder.shipped_at && <p><strong>Shipped:</strong> {new Date(selectedOrder.shipped_at).toLocaleDateString()}</p>}
-              {selectedOrder.delivered_at && <p><strong>Delivered:</strong> {new Date(selectedOrder.delivered_at).toLocaleDateString()}</p>}
+        <div className="order-items-modal">
+          <div className="modal-content">
+            <div className="modal-header">
+              <h2>🛍️ Items in Order #{selectedOrder.id}</h2>
+              <button 
+                className="close-button" 
+                onClick={() => {
+                  setSelectedOrder(null);
+                  setOrderItems([]);
+                }}
+              >
+                ×
+              </button>
             </div>
-          </div>
-          
-          <div className="items-grid">
-            {orderItems.map((item, index) => (
-              <div key={item.id || index} className="item-card">
-                <div className="item-header">
-                  <h4>{item.product?.name || 'Unknown Product'}</h4>
-                  <span className="item-id">ID: {item.product_id}</span>
-                </div>
-                <div className="item-details">
-                  <p><strong>Category:</strong> {item.product?.category || 'Unknown'}</p>
-                  <p><strong>Sale Price:</strong> ${item.sale_price?.toFixed(2) || '0.00'}</p>
-                  <p><strong>Status:</strong> {item.status}</p>
-                  <p><strong>Created:</strong> {new Date(item.created_at).toLocaleDateString()}</p>
-                  {item.shipped_at && <p><strong>Shipped:</strong> {new Date(item.shipped_at).toLocaleDateString()}</p>}
-                  {item.delivered_at && <p><strong>Delivered:</strong> {new Date(item.delivered_at).toLocaleDateString()}</p>}
-                </div>
+            
+            <div className="order-summary">
+              <div className="summary-card">
+                <h4>📋 Order Summary</h4>
+                <p><strong>Order ID:</strong> {selectedOrder.id}</p>
+                <p><strong>Status:</strong> {selectedOrder.status}</p>
+                <p><strong>Total Items:</strong> {orderItems.length}</p>
+                <p><strong>Created:</strong> {new Date(selectedOrder.created_at).toLocaleDateString()}</p>
+                {selectedOrder.shipped_at && <p><strong>Shipped:</strong> {new Date(selectedOrder.shipped_at).toLocaleDateString()}</p>}
+                {selectedOrder.delivered_at && <p><strong>Delivered:</strong> {new Date(selectedOrder.delivered_at).toLocaleDateString()}</p>}
               </div>
-            ))}
+            </div>
+            
+            <div className="items-grid">
+              {orderItems.map((item, index) => (
+                <div key={`${item.id || item.product_id || index}-${selectedOrder.id}`} className="item-card">
+                  <div className="item-header">
+                    <h4>{item.product?.name || 'Unknown Product'}</h4>
+                    <span className="item-id">Item ID: {item.id || index}</span>
+                  </div>
+                  <div className="item-details">
+                    <p><strong>Product ID:</strong> {item.product_id}</p>
+                    <p><strong>Category:</strong> {item.product?.category || 'Unknown'}</p>
+                    <p><strong>Sale Price:</strong> ${item.sale_price?.toFixed(2) || '0.00'}</p>
+                    <p><strong>Status:</strong> {item.status}</p>
+                    <p><strong>Created:</strong> {new Date(item.created_at).toLocaleDateString()}</p>
+                    {item.shipped_at && <p><strong>Shipped:</strong> {new Date(item.shipped_at).toLocaleDateString()}</p>}
+                    {item.delivered_at && <p><strong>Delivered:</strong> {new Date(item.delivered_at).toLocaleDateString()}</p>}
+                  </div>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       )}

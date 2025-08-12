@@ -144,7 +144,7 @@ app.get('/api/users/search', async (req, res) => {
   }
 });
 
-// 2. Get all orders for a specific user by name
+// 2. Get all orders for a specific user by name (first_name or last_name or full name)
 app.get('/api/users/:userName/orders', async (req, res) => {
   try {
     const userName = decodeURIComponent(req.params.userName).trim();
@@ -234,13 +234,95 @@ app.get('/api/users/:userName/orders', async (req, res) => {
   }
 });
 
+// 2b. Get all orders for a specific user by ID (more efficient)
+app.get('/api/users/id/:userId/orders', async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId);
+    console.log('Looking for orders for user ID:', userId, 'Type:', typeof userId);
+    
+    // Get user details
+    const user = await db.collection('users').findOne({ id: userId });
+    console.log('Found user:', user);
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+    
+    // Check what's in the orders collection for this user_id
+    const sampleOrders = await db.collection('orders').find({}).limit(5).toArray();
+    console.log('Sample orders from collection:', sampleOrders.map(o => ({
+      order_id: o.order_id,
+      user_id: o.user_id,
+      user_id_type: typeof o.user_id
+    })));
+    
+    // Try to find orders with different user_id formats
+    const ordersAsNumber = await db.collection('orders').find({ user_id: userId }).toArray();
+    const ordersAsString = await db.collection('orders').find({ user_id: userId.toString() }).toArray();
+    
+    console.log(`Orders found with user_id as number (${userId}):`, ordersAsNumber.length);
+    console.log(`Orders found with user_id as string ("${userId}"):`, ordersAsString.length);
+    
+    // Use whichever format works
+    let userOrders = ordersAsNumber;
+    if (ordersAsNumber.length === 0 && ordersAsString.length > 0) {
+      userOrders = ordersAsString;
+      console.log('Using string format for user_id');
+    }
+    
+    console.log('Final orders found:', userOrders.length);
+    
+    // Calculate order statistics based on available fields
+    const totalOrders = userOrders.length;
+    const totalItems = userOrders.reduce((sum, order) => sum + (order.num_of_item || 0), 0);
+    const cancelledOrders = userOrders.filter(order => order.status === 'Cancelled').length;
+    const activeOrders = totalOrders - cancelledOrders;
+    
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        email: user.email
+      },
+      orders: userOrders,
+      statistics: {
+        totalOrders: totalOrders,
+        totalItems: totalItems,
+        activeOrders: activeOrders,
+        cancelledOrders: cancelledOrders
+      },
+      debug: {
+        userId: userId,
+        userIdType: typeof userId,
+        ordersAsNumber: ordersAsNumber.length,
+        ordersAsString: ordersAsString.length,
+        sampleOrderUserIds: sampleOrders.map(o => ({ order_id: o.order_id, user_id: o.user_id, type: typeof o.user_id }))
+      }
+    });
+    
+  } catch (err) {
+    console.error('User orders error:', err);
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
 // 3. Get all items in a specific order
 app.get('/api/orders/:orderId/items', async (req, res) => {
   try {
     const orderId = parseInt(req.params.orderId);
+    console.log('Looking for items in order ID:', orderId, 'Type:', typeof orderId);
     
     // Get order details
     const order = await db.collection('orders').findOne({ order_id: orderId });
+    console.log('Found order:', order);
     
     if (!order) {
       return res.status(404).json({
@@ -251,16 +333,60 @@ app.get('/api/orders/:orderId/items', async (req, res) => {
     
     // Get user details using user_id from the order
     const user = await db.collection('users').findOne({ id: order.user_id });
+    console.log('Found user for order:', user);
     
-    // Get all items in this order using both order_id and user_id for accuracy
-    const orderItems = await db.collection('order_items')
-      .find({ 
-        order_id: orderId,
-        user_id: order.user_id 
-      })
-      .toArray();
+    // Check what's in the order_items collection
+    const sampleOrderItems = await db.collection('order_items').find({}).limit(5).toArray();
+    console.log('Sample order items from collection:', sampleOrderItems.map(item => ({
+      id: item.id,
+      order_id: item.order_id,
+      order_id_type: typeof item.order_id,
+      user_id: item.user_id,
+      user_id_type: typeof item.user_id
+    })));
     
-    console.log(`Found ${orderItems.length} items for order ${orderId} and user ${order.user_id}`);
+    // Try to find items with different data type combinations
+    const itemsAsNumbers = await db.collection('order_items').find({ 
+      order_id: orderId,
+      user_id: order.user_id 
+    }).toArray();
+    
+    const itemsAsStringOrder = await db.collection('order_items').find({ 
+      order_id: orderId.toString(),
+      user_id: order.user_id 
+    }).toArray();
+    
+    const itemsAsStringUser = await db.collection('order_items').find({ 
+      order_id: orderId,
+      user_id: order.user_id.toString() 
+    }).toArray();
+    
+    const itemsAsStringBoth = await db.collection('order_items').find({ 
+      order_id: orderId.toString(),
+      user_id: order.user_id.toString() 
+    }).toArray();
+    
+    console.log(`Items found with order_id as number (${orderId}) and user_id as number (${order.user_id}):`, itemsAsNumbers.length);
+    console.log(`Items found with order_id as string ("${orderId}") and user_id as number (${order.user_id}):`, itemsAsStringOrder.length);
+    console.log(`Items found with order_id as number (${orderId}) and user_id as string ("${order.user_id}"):`, itemsAsStringUser.length);
+    console.log(`Items found with order_id as string ("${orderId}") and user_id as string ("${order.user_id}"):`, itemsAsStringBoth.length);
+    
+    // Use whichever format works
+    let orderItems = itemsAsNumbers;
+    if (itemsAsNumbers.length === 0) {
+      if (itemsAsStringOrder.length > 0) {
+        orderItems = itemsAsStringOrder;
+        console.log('Using string format for order_id');
+      } else if (itemsAsStringUser.length > 0) {
+        orderItems = itemsAsStringUser;
+        console.log('Using string format for user_id');
+      } else if (itemsAsStringBoth.length > 0) {
+        orderItems = itemsAsStringBoth;
+        console.log('Using string format for both order_id and user_id');
+      }
+    }
+    
+    console.log(`Final items found for order ${orderId} and user ${order.user_id}:`, orderItems.length);
     
     // Get product details for each item
     const itemsWithProducts = await Promise.all(
@@ -291,7 +417,24 @@ app.get('/api/orders/:orderId/items', async (req, res) => {
         email: user.email
       } : null,
       items: itemsWithProducts,
-      totalItems: itemsWithProducts.length
+      totalItems: itemsWithProducts.length,
+      debug: {
+        orderId: orderId,
+        orderIdType: typeof orderId,
+        orderUserId: order.user_id,
+        orderUserIdType: typeof order.user_id,
+        itemsAsNumbers: itemsAsNumbers.length,
+        itemsAsStringOrder: itemsAsStringOrder.length,
+        itemsAsStringUser: itemsAsStringUser.length,
+        itemsAsStringBoth: itemsAsStringBoth.length,
+        sampleOrderItems: sampleOrderItems.map(item => ({ 
+          id: item.id, 
+          order_id: item.order_id, 
+          order_id_type: typeof item.order_id,
+          user_id: item.user_id, 
+          user_id_type: typeof item.user_id 
+        }))
+      }
     });
     
   } catch (err) {
@@ -308,11 +451,15 @@ app.get('/', (req, res) => {
   res.json({ 
     message: 'Ecommerce Order Viewer Backend is running',
     endpoints: [
+      'GET /api/test - Test endpoint to verify server is working',
       'GET /api/users - Get all users (for debugging)',
+      'GET /api/users/id/:userId - Get a specific user by ID',
       'GET /api/users/search - Search users by: first_name, last_name, email, age',
       'GET /api/users/:userName/orders - Get all orders for a specific user by name',
+      'GET /api/users/id/:userId/orders - Get all orders for a specific user by ID',
       'GET /api/orders/:orderId/items - Get all items in a specific order',
-      'GET /api/debug/users - Debug: See sample users in database'
+      'GET /api/debug/users - Debug: See sample users in database',
+      'GET /api/debug/datatypes - Debug: Check data types across collections'
     ]
   });
 });
@@ -327,12 +474,27 @@ app.get('/api/debug/users', async (req, res) => {
     // Get field names from first user document
     const userFields = users.length > 0 ? Object.keys(users[0]) : [];
     
+    // Check for potential duplicate order items
+    const orderItemsSample = await db.collection('order_items').find({}).limit(10).toArray();
+    const duplicateCheck = await db.collection('order_items').aggregate([
+      {
+        $group: {
+          _id: { order_id: "$order_id", user_id: "$user_id", product_id: "$product_id" },
+          count: { $sum: 1 }
+        }
+      },
+      {
+        $match: { count: { $gt: 1 } }
+      }
+    ]).toArray();
+    
     res.json({
       success: true,
       debug: {
         totalUsers: await db.collection('users').countDocuments(),
         totalOrders: await db.collection('orders').countDocuments(),
         totalProducts: await db.collection('products').countDocuments(),
+        totalOrderItems: await db.collection('order_items').countDocuments(),
         userFields: userFields, // Show what fields actually exist
         sampleUsers: users.map(u => {
           // Show all fields for debugging
@@ -344,9 +506,79 @@ app.get('/api/debug/users', async (req, res) => {
           return userData;
         }),
         sampleOrders: orders.map(o => ({ id: o.id, user_id: o.user_id, total: o.total })),
-        sampleProducts: products.map(p => ({ id: p.id, name: p.name, category: p.category }))
+        sampleProducts: products.map(p => ({ id: p.id, name: p.name, category: p.category })),
+        sampleOrderItems: orderItemsSample.map(item => ({
+          id: item.id,
+          order_id: item.order_id,
+          user_id: item.user_id,
+          product_id: item.product_id,
+          status: item.status
+        })),
+        duplicateCheck: duplicateCheck.length > 0 ? {
+          message: `Found ${duplicateCheck.length} potential duplicate combinations`,
+          duplicates: duplicateCheck
+        } : { message: 'No duplicates found' }
       }
     });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+// Debug endpoint to check data types and relationships
+app.get('/api/debug/datatypes', async (req, res) => {
+  try {
+    // Get sample data from each collection
+    const sampleUsers = await db.collection('users').find({}).limit(3).toArray();
+    const sampleOrders = await db.collection('orders').find({}).limit(3).toArray();
+    const sampleOrderItems = await db.collection('order_items').find({}).limit(3).toArray();
+    const sampleProducts = await db.collection('products').find({}).limit(3).toArray();
+    
+    // Analyze data types
+    const analysis = {
+      users: {
+        count: await db.collection('users').countDocuments(),
+        sample: sampleUsers.map(u => ({
+          id: { value: u.id, type: typeof u.id },
+          first_name: { value: u.first_name, type: typeof u.first_name },
+          last_name: { value: u.last_name, type: typeof u.last_name }
+        }))
+      },
+      orders: {
+        count: await db.collection('orders').countDocuments(),
+        sample: sampleOrders.map(o => ({
+          order_id: { value: o.order_id, type: typeof o.order_id },
+          user_id: { value: o.user_id, type: typeof o.user_id },
+          status: { value: o.status, type: typeof o.status }
+        }))
+      },
+      order_items: {
+        count: await db.collection('order_items').countDocuments(),
+        sample: sampleOrderItems.map(item => ({
+          id: { value: item.id, type: typeof item.id },
+          order_id: { value: item.order_id, type: typeof item.order_id },
+          user_id: { value: item.user_id, type: typeof item.user_id },
+          product_id: { value: item.product_id, type: typeof item.product_id }
+        }))
+      },
+      products: {
+        count: await db.collection('products').countDocuments(),
+        sample: sampleProducts.map(p => ({
+          id: { value: p.id, type: typeof p.id },
+          name: { value: p.name, type: typeof p.name }
+        }))
+      }
+    };
+    
+    res.json({
+      success: true,
+      message: 'Data type analysis',
+      analysis: analysis
+    });
+    
   } catch (err) {
     res.status(500).json({
       success: false,
@@ -368,6 +600,37 @@ app.get('/api/users', async (req, res) => {
         city: u.city,
         state: u.state
       }))
+    });
+  } catch (err) {
+    res.status(500).json({
+      success: false,
+      error: err.message
+    });
+  }
+});
+
+// Get a specific user by ID
+app.get('/api/users/id/:userId', async (req, res) => {
+  try {
+    const userId = parseInt(req.params.userId);
+    const user = await db.collection('users').findOne({ id: userId });
+    
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        error: 'User not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      user: {
+        id: user.id,
+        first_name: user.first_name,
+        last_name: user.last_name,
+        email: user.email,
+        age: user.age
+      }
     });
   } catch (err) {
     res.status(500).json({
@@ -405,6 +668,23 @@ app.get('/api/test/search/:searchTerm', async (req, res) => {
       error: err.message
     });
   }
+});
+
+// Test endpoint to verify server is working
+app.get('/api/test', (req, res) => {
+  res.json({
+    success: true,
+    message: 'Server is running and responding to API calls',
+    timestamp: new Date().toISOString(),
+    endpoints: [
+      '/api/users',
+      '/api/users/search',
+      '/api/users/id/:userId/orders',
+      '/api/orders/:orderId/items',
+      '/api/debug/users',
+      '/api/debug/datatypes'
+    ]
+  });
 });
 
 app.listen(5000, () => console.log("🚀 Backend running on port 5000"));

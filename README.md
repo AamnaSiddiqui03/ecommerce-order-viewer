@@ -213,6 +213,255 @@ The `uploadDatasets.js` script processes CSV files from the `Dataset/` folder:
 - `/api/users` - List all users
 - `/api/test/search/:term` - Test search functionality
 
+## 🚨 Error Handling Techniques
+
+### Backend Error Handling
+
+#### 1. **Try-Catch Blocks**
+```javascript
+app.get('/api/users/search', async (req, res) => {
+  try {
+    // Your API logic here
+    const users = await db.collection('users').find(filter).toArray();
+    res.json({ success: true, users });
+  } catch (err) {
+    console.error('Search error:', err);
+    res.status(500).json({ 
+      success: false, 
+      error: err.message,
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+```
+
+#### 2. **Input Validation**
+```javascript
+// Validate required parameters
+if (!req.query.first_name && !req.query.last_name && !req.query.email) {
+  return res.status(400).json({
+    success: false,
+    error: 'At least one search parameter is required',
+    required: ['first_name', 'last_name', 'email']
+  });
+}
+
+// Validate data types
+const age = parseInt(req.query.age);
+if (req.query.age && isNaN(age)) {
+  return res.status(400).json({
+    success: false,
+    error: 'Age must be a valid number',
+    received: req.query.age
+  });
+}
+```
+
+#### 3. **Database Connection Error Handling**
+```javascript
+// In server.js
+MongoClient.connect(MONGODB_URI, { useUnifiedTopology: true })
+  .then(client => {
+    console.log('✅ Connected to MongoDB');
+    db = client.db(DATABASE_NAME);
+  })
+  .catch(err => {
+    console.error('❌ MongoDB connection error:', err);
+    process.exit(1); // Exit if can't connect to database
+  });
+```
+
+#### 4. **Graceful Degradation**
+```javascript
+// Handle missing data gracefully
+const user = await db.collection('users').findOne(filter);
+if (!user) {
+  return res.status(404).json({
+    success: false,
+    error: 'User not found',
+    suggestions: await getSimilarUsers(searchTerm),
+    totalUsers: await db.collection('users').countDocuments()
+  });
+}
+```
+
+### Frontend Error Handling
+
+#### 1. **API Error Handling**
+```javascript
+const searchUsers = async () => {
+  try {
+    setLoading(true);
+    setError('');
+    
+    const response = await fetch(`/api/users/search?${searchParams}`);
+    
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.error || `HTTP ${response.status}`);
+    }
+    
+    const data = await response.json();
+    setUsers(data.users);
+    setTotalPages(data.pagination.pages);
+    
+  } catch (err) {
+    console.error('Search failed:', err);
+    setError(err.message || 'Failed to search users');
+    setUsers([]);
+  } finally {
+    setLoading(false);
+  }
+};
+```
+
+#### 2. **Form Validation**
+```javascript
+const validateForm = () => {
+  const errors = [];
+  
+  if (!searchParams.first_name && !searchParams.last_name && !searchParams.email) {
+    errors.push('At least one search field is required');
+  }
+  
+  if (searchParams.age && (isNaN(searchParams.age) || searchParams.age < 0)) {
+    errors.push('Age must be a positive number');
+  }
+  
+  if (searchParams.email && !searchParams.email.includes('@')) {
+    errors.push('Please enter a valid email address');
+  }
+  
+  return errors;
+};
+
+const handleSearch = (e) => {
+  e.preventDefault();
+  const errors = validateForm();
+  
+  if (errors.length > 0) {
+    setError(errors.join(', '));
+    return;
+  }
+  
+  searchUsers();
+};
+```
+
+#### 3. **Loading States & User Feedback**
+```javascript
+const [loading, setLoading] = useState(false);
+const [error, setError] = useState('');
+
+// In your JSX
+{loading && <div className="loading-spinner">🔍 Searching...</div>}
+{error && <div className="error-message">❌ {error}</div>}
+{users.length === 0 && !loading && !error && (
+  <div className="no-results">📭 No users found matching your criteria</div>
+)}
+```
+
+#### 4. **Network Error Handling**
+```javascript
+const handleNetworkError = (err) => {
+  if (err.name === 'TypeError' && err.message.includes('fetch')) {
+    return 'Network error: Please check your internet connection';
+  }
+  if (err.message.includes('Failed to fetch')) {
+    return 'Server unavailable: Please try again later';
+  }
+  return err.message || 'An unexpected error occurred';
+};
+
+// Use in your error handling
+} catch (err) {
+  const userFriendlyError = handleNetworkError(err);
+  setError(userFriendlyError);
+}
+```
+
+### Global Error Handling
+
+#### 1. **Unhandled Promise Rejections**
+```javascript
+// In your main server file
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Don't exit the process, just log the error
+});
+
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  process.exit(1); // Exit for uncaught exceptions
+});
+```
+
+#### 2. **Request Timeout Handling**
+```javascript
+// Add timeout to your fetch requests
+const controller = new AbortController();
+const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 seconds
+
+try {
+  const response = await fetch(url, {
+    signal: controller.signal
+  });
+  clearTimeout(timeoutId);
+  // Process response
+} catch (err) {
+  if (err.name === 'AbortError') {
+    setError('Request timed out. Please try again.');
+  } else {
+    setError('Request failed: ' + err.message);
+  }
+}
+```
+
+### Error Logging & Monitoring
+
+#### 1. **Structured Error Logging**
+```javascript
+const logError = (context, error, additionalData = {}) => {
+  const errorLog = {
+    timestamp: new Date().toISOString(),
+    context,
+    error: error.message,
+    stack: error.stack,
+    ...additionalData
+  };
+  
+  console.error('🚨 Error Log:', JSON.stringify(errorLog, null, 2));
+  
+  // In production, send to logging service
+  // await logToService(errorLog);
+};
+```
+
+#### 2. **User-Friendly Error Messages**
+```javascript
+const getErrorMessage = (error, context) => {
+  const errorMessages = {
+    'User not found': 'No user found with those details. Please try different search criteria.',
+    'Network Error': 'Unable to connect to the server. Please check your internet connection.',
+    'Validation Error': 'Please check your input and try again.',
+    'Server Error': 'Something went wrong on our end. Please try again later.'
+  };
+  
+  return errorMessages[error] || 'An unexpected error occurred. Please try again.';
+};
+```
+
+### Best Practices
+
+1. **Always use try-catch** around async operations
+2. **Validate input** before processing
+3. **Provide meaningful error messages** to users
+4. **Log errors** with context for debugging
+5. **Handle edge cases** (empty results, network issues)
+6. **Use appropriate HTTP status codes**
+7. **Implement retry logic** for transient failures
+8. **Test error scenarios** during development
+
 ## 🤝 Contributing
 
 1. Fork the repository
